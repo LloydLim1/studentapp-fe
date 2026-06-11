@@ -1,0 +1,50 @@
+name: FlowCI Package
+'on':
+  workflow_run:
+    workflows:
+      - FlowCI Quality
+    types:
+      - completed
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  packages: write
+env:
+  CI_VALIDATE_URL: https://flowci-be-test.onrender.com/api/v1/ci/validate
+jobs:
+  validate-access:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate FlowCI access
+        run: |-
+          RESPONSE=$(curl -sf -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.CI_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"repo\":\"${{ github.repository }}\",\"stage\":\"package\",\"workflowRunId\":\"${{ github.run_id }}\",\"headSha\":\"${{ github.event.workflow_run.head_sha || github.sha }}\"}" \
+            "$CI_VALIDATE_URL") || true
+          HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -1)
+          BODY=$(printf '%s' "$RESPONSE" | head -n -1)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::FlowCI authorization failed (HTTP $HTTP_CODE). ${BODY}"
+            exit 1
+          fi
+          echo "FlowCI authorization validated."
+  build:
+    needs:
+      - validate-access
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./.
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci --ignore-scripts; else npm install --ignore-scripts; fi
+      - run: npm run build
