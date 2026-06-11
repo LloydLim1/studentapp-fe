@@ -1,0 +1,66 @@
+name: FlowCI Quality
+'on':
+  workflow_run:
+    workflows:
+      - FlowCI Access Gate
+    types:
+      - completed
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  security-events: write
+env:
+  CI_VALIDATE_URL: https://flowci-be-test.onrender.com/api/v1/ci/validate
+jobs:
+  validate-access:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate FlowCI access
+        run: |-
+          RESPONSE=$(curl -sf -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.CI_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"repo\":\"${{ github.repository }}\",\"stage\":\"quality\",\"workflowRunId\":\"${{ github.run_id }}\",\"headSha\":\"${{ github.event.workflow_run.head_sha || github.sha }}\"}" \
+            "$CI_VALIDATE_URL") || true
+          HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -1)
+          BODY=$(printf '%s' "$RESPONSE" | head -n -1)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::FlowCI authorization failed (HTTP $HTTP_CODE). ${BODY}"
+            exit 1
+          fi
+          echo "FlowCI authorization validated."
+  frontend-tests:
+    needs:
+      - validate-access
+    uses: cicd-external-project/cicd-workflow/.github/workflows/frontend-tests.yml@v1
+    with:
+      working-directory: .
+      system-name: studentapp-frontend
+      unit-tests-directory: src
+      node-version: 24
+      coverage-threshold: 80
+      enforce-coverage: true
+      test-command: npm run test -- --coverage --coverageReporters=json-summary
+      checkout-ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+  lint:
+    needs:
+      - validate-access
+    uses: cicd-external-project/cicd-workflow/.github/workflows/lint-check.yml@v1
+    with:
+      working-directory: .
+      system-name: studentapp-frontend
+      node-version: 24
+      lint-command: npm run lint
+      checkout-ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+  security:
+    needs:
+      - validate-access
+    uses: cicd-external-project/cicd-workflow/.github/workflows/security-scan.yml@v1
+    with:
+      working-directory: .
+      system-name: studentapp-frontend
+      node-version: 24
+      fail-on-high: true
+      checkout-ref: ${{ github.event.workflow_run.head_sha || github.sha }}
