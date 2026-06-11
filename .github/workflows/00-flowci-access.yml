@@ -1,0 +1,36 @@
+name: FlowCI Access Gate
+'on':
+  push:
+    branches:
+      - test
+      - uat
+      - main
+  pull_request:
+    branches:
+      - test
+      - uat
+      - main
+  workflow_dispatch: {}
+permissions:
+  contents: read
+env:
+  CI_VALIDATE_URL: https://flowci-be-test.onrender.com/api/v1/ci/validate
+jobs:
+  validate-access:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate FlowCI access
+        run: |-
+          RESPONSE=$(curl -sf -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.CI_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"repo\":\"${{ github.repository }}\",\"stage\":\"access\",\"workflowRunId\":\"${{ github.run_id }}\",\"headSha\":\"${{ github.event.workflow_run.head_sha || github.sha }}\"}" \
+            "$CI_VALIDATE_URL") || true
+          HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -1)
+          BODY=$(printf '%s' "$RESPONSE" | head -n -1)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::FlowCI authorization failed (HTTP $HTTP_CODE). ${BODY}"
+            exit 1
+          fi
+          echo "FlowCI authorization validated."
